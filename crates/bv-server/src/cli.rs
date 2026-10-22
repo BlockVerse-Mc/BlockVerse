@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::config;
 use crate::console;
+use crate::lang;
 
 pub fn option_value(args: &[String], name: &str) -> Option<String> {
     let index = args.iter().position(|a| a == name)?;
@@ -30,13 +31,13 @@ pub fn init_in(path: &Path, args: &[String]) -> i32 {
     }
 }
 
-const USAGE: &str = "\
-Usage: blockverse [option]
-  (no option)                 run the server in the current folder
-  --version                   print the versions
-  --init [--server-name N] [--language en|fa]
-                              create server.properties in the current folder
-  --help                      show this text";
+fn usage() -> String {
+    let codes: Vec<&str> = lang::all().iter().map(|(code, _)| *code).collect();
+    format!(
+        "Usage: blockverse [option]\n  (no option)                 run the server in the current folder\n  --version                   print the versions\n  --init [--server-name N] [--language CODE]\n                              create server.properties in the current folder\n                              language codes: {}\n  --help                      show this text",
+        codes.join(" ")
+    )
+}
 
 // Options
 pub fn handle(args: &[String]) -> Option<i32> {
@@ -45,7 +46,7 @@ pub fn handle(args: &[String]) -> Option<i32> {
         return Some(0);
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("{USAGE}");
+        println!("{}", usage());
         return Some(0);
     }
     if args.iter().any(|a| a == "--init") {

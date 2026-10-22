@@ -22,6 +22,14 @@ check() {
   fi
 }
 
+has_all() {
+  text="$1"
+  shift
+  for needle in "$@"; do
+    printf '%s\n' "$text" | grep -q "$needle" || return 1
+  done
+}
+
 # Fake toolchain
 cat > "$BIN_DIR/rustc" <<'EOS'
 #!/bin/sh
@@ -29,11 +37,27 @@ echo "rustc 1.90.0 (fake)"
 EOS
 cat > "$BIN_DIR/cargo" <<'EOS'
 #!/bin/sh
+case "${1:-}" in
+  tree)
+    printf 'blockverse v1.0.0\nalpha v0.1.0\nbeta v0.2.0\n[build-dependencies]\nalpha v0.1.0 (*)\n'
+    exit 0
+    ;;
+  fetch)
+    exit 0
+    ;;
+esac
 manifest=""
 while [ $# -gt 0 ]; do
   if [ "$1" = "--manifest-path" ]; then manifest="$2"; fi
   shift
 done
+printf '   Compiling alpha v0.1.0\n   Compiling beta v0.2.0\n'
+sleep 2
+printf '   Compiling blockverse v1.0.0\n'
+if [ -n "${FAKE_BUILD_FAIL:-}" ]; then
+  echo "error[E0000]: fake failure" >&2
+  exit 101
+fi
 dir="$(dirname "$manifest")"
 mkdir -p "$dir/target/release"
 cat > "$dir/target/release/blockverse" <<'EOB'
@@ -86,30 +110,39 @@ export HOME="$FAKE_HOME"
 export PATH="$BIN_DIR:$PATH"
 export BV_REPO_URL="file://$REMOTE"
 export BV_RELEASE_BASE="file://$RELEASES"
-export BV_SERVER_NAME="Test Server"
-export BV_LANGUAGE="fa"
+export BV_POLL=1
+unset BV_SERVER_NAME BV_LANGUAGE NO_COLOR || true
 INSTALL="$ROOT/install.sh"
 
 # Source build of main
 export BV_DIR="$WORK/main"
 out="$(sh "$INSTALL" 2>&1)"
-check "main prints only the progress message and the result" '[ "$(printf "%s\n" "$out" | wc -l)" -eq 2 ]'
-check "main shows Preparing BlockVerse" 'printf "%s\n" "$out" | head -n 1 | grep -qx "Preparing BlockVerse"'
+check "main starts with the progress title" 'printf "%s\n" "$out" | head -n 1 | grep -qx "Preparing BlockVerse"'
+check "main shows every stage" 'has_all "$out" "Checking system" "Installing prerequisites" "Downloading source" "Downloading dependencies" "Compiling BlockVerse" "Installing files"'
+check "main shows a percentage while compiling" 'printf "%s\n" "$out" | grep -qE "Compiling BlockVerse \[[#.]*\] %[0-9]+$"'
+check "main ends the compile step with 100 percent and done" 'printf "%s\n" "$out" | grep -q "Compiling BlockVerse \[[#.]*] %100 done"'
+check "main prints Done and the start path last" '[ "$(printf "%s\n" "$out" | tail -n 2 | head -n 1)" = "Done" ] && printf "%s\n" "$out" | tail -n 1 | grep -q "start.sh"'
 check "main installs the binary" '[ -x "$BV_DIR/blockverse" ]'
 check "main installs start.sh" '[ -x "$BV_DIR/start.sh" ]'
 check "main was built from the newest commit" '[ -f "$BV_DIR/source/extra.txt" ]'
-check "main creates server.properties in bvmc" '[ -f "$BV_DIR/bvmc/server.properties" ]'
-check "init received the answers" 'grep -q "server-name Test Server --language fa" "$BV_DIR/bvmc/init.txt"'
+check "main asks nothing and creates no settings" '[ ! -f "$BV_DIR/bvmc/server.properties" ]'
 check "VERSION file says main" '[ "$(cat "$BV_DIR/VERSION")" = "main" ]'
+
+# Answers given through variables
+export BV_DIR="$WORK/answers"
+out="$(BV_SERVER_NAME="Test Server" BV_LANGUAGE=de sh "$INSTALL" 2>&1)"
+check "answers create server.properties through --init" '[ -f "$BV_DIR/bvmc/server.properties" ]'
+check "init received the answers" 'grep -q "server-name Test Server --language de" "$BV_DIR/bvmc/init.txt"'
+check "creating settings is a stage" 'has_all "$out" "Creating settings"'
 
 # Prebuilt tag
 export BV_DIR="$WORK/tag"
 out="$(sh "$INSTALL" v1.0.0 2>&1)"
+check "tag shows the download, verify and install stages" 'has_all "$out" "Downloading BlockVerse v1.0.0" "Verifying download" "Installing files" "Done"'
 check "tag installs the prebuilt file" 'grep -q prebuilt "$BV_DIR/blockverse"'
 check "tag did not build from source" '[ ! -d "$BV_DIR/source" ]'
 check "tag installs start.sh" '[ -x "$BV_DIR/start.sh" ]'
 check "tag installs the licenses" '[ -f "$BV_DIR/LICENSE" ] && [ -f "$BV_DIR/NOTICE" ]'
-check "tag runs init in bvmc" '[ -f "$BV_DIR/bvmc/server.properties" ]'
 check "VERSION file says v1.0.0" '[ "$(cat "$BV_DIR/VERSION")" = "v1.0.0" ]'
 
 # Same command through a pipe
@@ -122,6 +155,7 @@ export BV_DIR="$WORK/fallback"
 mv "$RELEASES/v1.0.0" "$RELEASES/hidden"
 out="$(sh "$INSTALL" v1.0.0 2>&1)"
 check "missing release file falls back to the source at the tag" '[ -d "$BV_DIR/source" ] && [ ! -f "$BV_DIR/source/extra.txt" ]'
+check "the fallback says so" 'has_all "$out" "no prebuilt file, building from source"'
 mv "$RELEASES/hidden" "$RELEASES/v1.0.0"
 
 # Damaged download is refused
@@ -130,6 +164,13 @@ echo "0000" > "$RELEASES/v1.0.0/blockverse-1.0.0-$TARGET.tar.gz.sha256"
 if out="$(sh "$INSTALL" v1.0.0 2>&1)"; then status=0; else status=1; fi
 check "a checksum mismatch stops the install" '[ "$status" -eq 1 ] && printf "%s\n" "$out" | grep -q "checksum mismatch"'
 check "nothing is installed after a mismatch" '[ ! -f "$BV_DIR/blockverse" ]'
+
+# Failing build
+export BV_DIR="$WORK/buildfail"
+if out="$(FAKE_BUILD_FAIL=1 sh "$INSTALL" 2>&1)"; then status=0; else status=1; fi
+check "a failing build stops the install" '[ "$status" -eq 1 ] && printf "%s\n" "$out" | grep -q "BlockVerse install failed"'
+check "a failing build shows the end of the compiler output" 'printf "%s\n" "$out" | grep -q "fake failure"'
+check "nothing is installed after a failing build" '[ ! -f "$BV_DIR/blockverse" ]'
 
 # Invalid version
 export BV_DIR="$WORK/invalid"

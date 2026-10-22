@@ -10,7 +10,7 @@ Invalid values are reported in the log and the default is used. Unknown keys are
 | `server-port` | 1 to 65535 | `19132` | UDP port |
 | `server-name` | text | `BlockVerse` | Name in the server list |
 | `motd` | text | `BlockVerse` | Second line in the server list (BlockVerse extension) |
-| `language` | en, fa | `en` | Language of the main console messages (startup, join/leave, help, shutdown); other messages stay English |
+| `language` | en, fa, ar, tr, ru, es, pt, fr, de, it, id, zh, ja, ko | `en` | Language of the main console messages (startup, join/leave, help, shutdown); other messages stay English. The server asks for it on the first start. See [TRANSLATING.md](TRANSLATING.md) |
 | `gamemode` | survival, creative, adventure (or 0 to 2) | `creative` | Game mode sent at world entry |
 | `difficulty` | peaceful, easy, normal, hard (or 0 to 3) | `peaceful` | Difficulty sent at world entry |
 | `max-players` | number above 0 | `20` | Player limit |

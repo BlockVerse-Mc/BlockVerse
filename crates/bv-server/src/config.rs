@@ -111,7 +111,7 @@ server-port=19132
 server-name=BlockVerse
 motd=BlockVerse
 
-# Language of the console messages: en or fa
+# Language of the console messages: en, fa, ar, tr, ru, es, pt, fr, de, it, id, zh, ja, ko
 language=en
 
 # survival, creative or adventure
@@ -274,7 +274,7 @@ pub fn parse(text: &str) -> (Config, Vec<String>) {
             "motd" => cfg.motd = value.to_string(),
             "language" => match lang::parse(value) {
                 Some(l) => cfg.language = l,
-                None => bad("use en or fa"),
+                None => bad("use a language code such as en, fa or de"),
             },
             "gamemode" => match parse_gamemode(value) {
                 Some(m) => cfg.gamemode = m,
@@ -400,6 +400,10 @@ pub fn load_settings() -> (Config, Vec<String>) {
     load(FILE)
 }
 
+pub fn settings_exist() -> bool {
+    Path::new(FILE).exists() || Path::new(LEGACY_FILE).exists()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,7 +446,7 @@ mod tests {
     #[test]
     fn invalid_values_warn_and_keep_defaults() {
         let text = "server-ip=nope\nserver-port=0\ngamemode=hardcore\ndifficulty=insane\nmax-players=0\n\
-                    language=de\nlevel-name=../escape\nlevel-type=normal\nview-distance=99\nonline-mode=maybe\n\
+                    language=xx\nlevel-name=../escape\nlevel-type=normal\nview-distance=99\nonline-mode=maybe\n\
                     allow-cheats=yes\ndefault-player-permission-level=god\nmax-threads=999\nlog-level=loud\n\
                     utc-offset=xyz\nlogin-timeout=0\nmax-pending-logins=0\nmax-packets-per-second=5\n\
                     world-stage=9\nchunk-variant=7\nfoo=1\njunk\n";

@@ -1,214 +1,371 @@
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-static CURRENT: AtomicU8 = AtomicU8::new(0);
+struct Entry {
+    code: &'static str,
+    name: &'static str,
+    aliases: &'static [&'static str],
+    text: &'static str,
+}
+
+// Catalogs
+static LANGUAGES: [Entry; 14] = [
+    Entry {
+        code: "en",
+        name: "English",
+        aliases: &["eng", "english"],
+        text: include_str!("../lang/en.properties"),
+    },
+    Entry {
+        code: "fa",
+        name: "فارسی",
+        aliases: &["fas", "per", "persian", "farsi"],
+        text: include_str!("../lang/fa.properties"),
+    },
+    Entry {
+        code: "ar",
+        name: "العربية",
+        aliases: &["ara", "arabic"],
+        text: include_str!("../lang/ar.properties"),
+    },
+    Entry {
+        code: "tr",
+        name: "Türkçe",
+        aliases: &["tur", "turkish", "türkçe", "turkce"],
+        text: include_str!("../lang/tr.properties"),
+    },
+    Entry {
+        code: "ru",
+        name: "Русский",
+        aliases: &["rus", "russian", "русский"],
+        text: include_str!("../lang/ru.properties"),
+    },
+    Entry {
+        code: "es",
+        name: "Español",
+        aliases: &["spa", "spanish", "español", "espanol"],
+        text: include_str!("../lang/es.properties"),
+    },
+    Entry {
+        code: "pt",
+        name: "Português",
+        aliases: &["por", "portuguese", "pt-br", "pt-pt", "português", "portugues"],
+        text: include_str!("../lang/pt.properties"),
+    },
+    Entry {
+        code: "fr",
+        name: "Français",
+        aliases: &["fra", "fre", "french", "français", "francais"],
+        text: include_str!("../lang/fr.properties"),
+    },
+    Entry {
+        code: "de",
+        name: "Deutsch",
+        aliases: &["deu", "ger", "german", "deutsch"],
+        text: include_str!("../lang/de.properties"),
+    },
+    Entry {
+        code: "it",
+        name: "Italiano",
+        aliases: &["ita", "italian", "italiano"],
+        text: include_str!("../lang/it.properties"),
+    },
+    Entry {
+        code: "id",
+        name: "Bahasa Indonesia",
+        aliases: &["ind", "indonesian", "bahasa"],
+        text: include_str!("../lang/id.properties"),
+    },
+    Entry {
+        code: "zh",
+        name: "简体中文",
+        aliases: &["zho", "chi", "chinese", "zh-cn", "zh-hans", "简体中文"],
+        text: include_str!("../lang/zh.properties"),
+    },
+    Entry {
+        code: "ja",
+        name: "日本語",
+        aliases: &["jpn", "japanese", "日本語"],
+        text: include_str!("../lang/ja.properties"),
+    },
+    Entry {
+        code: "ko",
+        name: "한국어",
+        aliases: &["kor", "korean", "한국어"],
+        text: include_str!("../lang/ko.properties"),
+    },
+];
+
+static CURRENT: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Language {
-    En,
-    Fa,
+pub struct Language(usize);
+
+#[allow(non_upper_case_globals, dead_code)]
+impl Language {
+    pub const En: Language = Language(0);
+    pub const Fa: Language = Language(1);
 }
 
 // Selection
 pub fn parse(text: &str) -> Option<Language> {
-    match text.trim().to_ascii_lowercase().as_str() {
-        "en" | "eng" | "english" => Some(Language::En),
-        "fa" | "fas" | "persian" | "farsi" => Some(Language::Fa),
-        _ => None,
+    let wanted = text.trim().to_lowercase().replace('_', "-");
+    if wanted.is_empty() {
+        return None;
     }
+    LANGUAGES
+        .iter()
+        .position(|e| e.code == wanted || e.aliases.contains(&wanted.as_str()))
+        .map(Language)
 }
 
 pub fn code(language: Language) -> &'static str {
-    match language {
-        Language::En => "en",
-        Language::Fa => "fa",
-    }
+    LANGUAGES[language.0].code
+}
+
+pub fn all() -> Vec<(&'static str, &'static str)> {
+    LANGUAGES.iter().map(|e| (e.code, e.name)).collect()
 }
 
 pub fn set(language: Language) {
-    CURRENT.store(
-        match language {
-            Language::En => 0,
-            Language::Fa => 1,
-        },
-        Ordering::Relaxed,
-    );
+    CURRENT.store(language.0, Ordering::Relaxed);
 }
 
 pub fn current() -> Language {
-    match CURRENT.load(Ordering::Relaxed) {
-        1 => Language::Fa,
-        _ => Language::En,
-    }
+    Language(CURRENT.load(Ordering::Relaxed))
 }
 
-fn pick(en: String, fa: String) -> String {
-    match current() {
-        Language::En => en,
-        Language::Fa => fa,
+// Lookup
+fn lookup(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        if let Some((name, value)) = line.split_once('=') {
+            if name.trim() == key {
+                return Some(value.trim().to_string());
+            }
+        }
     }
+    None
+}
+
+pub fn text_in(language: Language, key: &str, args: &[(&str, String)]) -> String {
+    let mut text = lookup(LANGUAGES[language.0].text, key)
+        .or_else(|| lookup(LANGUAGES[0].text, key))
+        .unwrap_or_else(|| key.to_string());
+    for (name, value) in args {
+        text = text.replace(&format!("{{{name}}}"), value);
+    }
+    text
+}
+
+fn tr(key: &str, args: &[(&str, String)]) -> String {
+    text_in(current(), key, args)
 }
 
 // Messages
 pub fn starting(release: &str, version: &str, minecraft: &str, protocol: u32) -> String {
-    pick(
-        format!("Starting BlockVerse {release} ({version}) for Minecraft {minecraft} (protocol {protocol})"),
-        format!("در حال راه‌اندازی BlockVerse {release} ({version}) برای ماینکرافت {minecraft} (پروتکل {protocol})"),
+    tr(
+        "starting",
+        &[
+            ("release", release.to_string()),
+            ("version", version.to_string()),
+            ("minecraft", minecraft.to_string()),
+            ("protocol", protocol.to_string()),
+        ],
     )
 }
 
 pub fn offline_warning_1() -> String {
-    pick(
-        "Online mode is disabled. The server will not verify that players are authenticated to Xbox Live.".to_string(),
-        "حالت آنلاین غیرفعاله. سرور هویت بازیکن‌ها رو با Xbox Live تأیید نمی‌کنه.".to_string(),
-    )
+    tr("offline_warning_1", &[])
 }
 
 pub fn offline_warning_2() -> String {
-    pick(
-        "This allows anyone to connect with any username they choose. Do not expose this server to the internet.".to_string(),
-        "این یعنی هر کسی می‌تونه با هر اسمی وصل بشه. سرور رو روی اینترنت باز نذار.".to_string(),
-    )
+    tr("offline_warning_2", &[])
 }
 
 pub fn network_running(address: &str) -> String {
-    pick(
-        format!("BlockVerse network interface running on {address}"),
-        format!("رابط شبکهٔ BlockVerse روی {address} در حال اجراست"),
-    )
+    tr("network_running", &[("address", address.to_string())])
 }
 
 pub fn level_info(name: &str, seed: u64) -> String {
-    pick(
-        format!("Level '{name}': flat world, seed {seed}"),
-        format!("جهان «{name}»: تخت، سید {seed}"),
-    )
+    tr("level_info", &[("name", name.to_string()), ("seed", seed.to_string())])
 }
 
 pub fn done(seconds: f64) -> String {
-    pick(
-        format!("Done ({seconds:.3}s)! For help, type \"help\" or \"?\""),
-        format!("آماده شد ({seconds:.3} ثانیه)! برای راهنما بنویس help"),
-    )
+    tr("done", &[("seconds", format!("{seconds:.3}"))])
 }
 
 pub fn signal_stop() -> String {
-    pick(
-        "Received signal interrupt, stopping the server".to_string(),
-        "سیگنال توقف دریافت شد، سرور در حال توقف است".to_string(),
-    )
+    tr("signal_stop", &[])
 }
 
 pub fn stop_requested() -> String {
-    pick(
-        "Stop requested from the console".to_string(),
-        "درخواست توقف از کنسول رسید".to_string(),
-    )
+    tr("stop_requested", &[])
 }
 
 pub fn stopping() -> String {
-    pick("Stopping other threads".to_string(), "در حال بستن بخش‌های دیگر".to_string())
+    tr("stopping", &[])
 }
 
 pub fn goodbye() -> String {
-    pick("Goodbye.".to_string(), "خداحافظ.".to_string())
+    tr("goodbye", &[])
 }
 
 pub fn player_joined(name: &str, id: u64, skin: &str) -> String {
-    pick(
-        format!("{name} joined (id {id}, default skin: {skin})"),
-        format!("{name} وارد شد (شناسه {id}، اسکین پیش‌فرض: {skin})"),
+    tr(
+        "player_joined",
+        &[("name", name.to_string()), ("id", id.to_string()), ("skin", skin.to_string())],
     )
 }
 
 pub fn player_left(name: &str, id: u64) -> String {
-    pick(format!("{name} left (id {id})"), format!("{name} خارج شد (شناسه {id})"))
+    tr("player_left", &[("name", name.to_string()), ("id", id.to_string())])
 }
 
-const HELP_EN: &str = "\
-Commands:
-  help                   show this list
-  version                show the versions
-  status                 show uptime, players, packets and loop lag
-  list                   show connected players
-  plugins                show loaded plugins
-  worlds                 show the world
-  skins                  show the built-in default skins
-  say <text>             announce a message (console only for now)
-  debug                  show the log level
-  debug level <level>    set the log level (error, warn, info, debug, trace)
-  debug network          show connection and packet counters
-  debug chunks           show chunk counters and the world test settings
-  debug plugins          show loaded plugins
-  save-all               not available yet (nothing is saved)
-  fakejoin <name>        simulate a player joining (to test plugins)
-  fakechat <id> <text>   simulate a chat message from a player
-  fakequit <id>          simulate a player leaving
-  selftest               run internal checks
-  stop                   stop the server";
-
-const HELP_FA: &str = "\
-دستورات:
-  help                   نمایش همین فهرست
-  version                نمایش نسخه‌ها
-  status                 نمایش زمان اجرا، بازیکن‌ها، بسته‌ها و تأخیر
-  list                   نمایش بازیکن‌های وصل‌شده
-  plugins                نمایش پلاگین‌های بارگذاری‌شده
-  worlds                 نمایش جهان
-  skins                  نمایش اسکین‌های پیش‌فرض
-  say <متن>              اعلام پیام (فعلاً فقط در کنسول)
-  debug                  نمایش سطح لاگ
-  debug level <سطح>      تغییر سطح لاگ (error, warn, info, debug, trace)
-  debug network          نمایش شمارنده‌های اتصال و بسته
-  debug chunks           نمایش شمارنده‌های چانک و تنظیمات تست جهان
-  debug plugins          نمایش پلاگین‌ها
-  save-all               هنوز در دسترس نیست (چیزی ذخیره نمی‌شود)
-  fakejoin <نام>         شبیه‌سازی ورود بازیکن (برای تست پلاگین)
-  fakechat <id> <متن>    شبیه‌سازی پیام چت
-  fakequit <id>          شبیه‌سازی خروج بازیکن
-  selftest               اجرای بررسی‌های داخلی
-  stop                   توقف سرور";
+// Help
+const HELP_COMMANDS: [(&str, &str); 19] = [
+    ("help", "help.help"),
+    ("version", "help.version"),
+    ("status", "help.status"),
+    ("list", "help.list"),
+    ("plugins", "help.plugins"),
+    ("worlds", "help.worlds"),
+    ("skins", "help.skins"),
+    ("say <text>", "help.say"),
+    ("debug", "help.debug"),
+    ("debug level <level>", "help.debug_level"),
+    ("debug network", "help.debug_network"),
+    ("debug chunks", "help.debug_chunks"),
+    ("debug plugins", "help.debug_plugins"),
+    ("save-all", "help.save_all"),
+    ("fakejoin <name>", "help.fakejoin"),
+    ("fakechat <id> <text>", "help.fakechat"),
+    ("fakequit <id>", "help.fakequit"),
+    ("selftest", "help.selftest"),
+    ("stop", "help.stop"),
+];
 
 pub fn help_text() -> String {
-    pick(HELP_EN.to_string(), HELP_FA.to_string())
+    let mut out = tr("help.title", &[]);
+    for (syntax, key) in HELP_COMMANDS {
+        out.push_str(&format!("\n  {syntax:<22} {}", tr(key, &[])));
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn keys(text: &str) -> Vec<&str> {
+        text.lines().filter_map(|l| l.split_once('=')).map(|(k, _)| k.trim()).collect()
+    }
+
+    fn value_of<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+        text.lines()
+            .filter_map(|l| l.split_once('='))
+            .find(|(k, _)| k.trim() == key)
+            .map(|(_, v)| v.trim())
+    }
+
+    fn placeholders(value: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut rest = value;
+        while let Some(start) = rest.find('{') {
+            match rest[start..].find('}') {
+                Some(end) => {
+                    found.push(rest[start + 1..start + end].to_string());
+                    rest = &rest[start + end + 1..];
+                }
+                None => break,
+            }
+        }
+        found.sort();
+        found
+    }
+
     #[test]
     fn languages_are_parsed() {
         assert_eq!(parse("EN"), Some(Language::En));
         assert_eq!(parse(" persian "), Some(Language::Fa));
         assert_eq!(parse("fa"), Some(Language::Fa));
-        assert_eq!(parse("de"), None);
         assert_eq!(code(Language::Fa), "fa");
+        assert_eq!(parse("pt_BR").map(code), Some("pt"));
+        assert_eq!(parse("Deutsch").map(code), Some("de"));
+        assert_eq!(parse("xx"), None);
+        assert_eq!(parse(""), None);
     }
 
     #[test]
-    fn messages_follow_the_selected_language() {
+    fn language_codes_are_unique_and_parse_to_themselves() {
+        assert_eq!(LANGUAGES[0].code, "en");
+        assert_eq!(LANGUAGES[1].code, "fa");
+        for (index, entry) in LANGUAGES.iter().enumerate() {
+            assert_eq!(parse(entry.code), Some(Language(index)), "{}", entry.code);
+            assert_eq!(LANGUAGES.iter().filter(|e| e.code == entry.code).count(), 1);
+            assert!(!entry.name.is_empty());
+        }
+        assert_eq!(all().len(), LANGUAGES.len());
+    }
+
+    #[test]
+    fn every_language_has_the_keys_and_placeholders_of_english() {
+        let english = LANGUAGES[0].text;
+        let mut expected = keys(english);
+        expected.sort();
+        assert!(expected.len() >= 36);
+        for entry in &LANGUAGES {
+            let mut own = keys(entry.text);
+            own.sort();
+            assert_eq!(own, expected, "keys of {}", entry.code);
+            for key in &expected {
+                let reference = value_of(english, key).unwrap();
+                let value = value_of(entry.text, key).unwrap();
+                assert!(!value.is_empty(), "{} has an empty {key}", entry.code);
+                assert_eq!(placeholders(value), placeholders(reference), "{} {key}", entry.code);
+            }
+        }
+    }
+
+    #[test]
+    fn the_selected_language_changes_the_messages() {
         set(Language::En);
         assert!(done(1.5).contains("Done (1.500s)"));
         assert!(player_joined("Steve", 1, "Black").contains("joined"));
         assert!(help_text().starts_with("Commands:"));
+        assert!(help_text().contains("stop"));
         set(Language::Fa);
         assert!(done(1.5).contains("آماده شد"));
         assert!(player_left("Steve", 2).contains("خارج شد"));
         assert!(help_text().starts_with("دستورات:"));
-        for text in [
-            starting("Beta", "0.1.0", "1.21.50", 766),
-            offline_warning_1(),
-            offline_warning_2(),
-            network_running("127.0.0.1:19132"),
-            level_info("world", 7),
-            signal_stop(),
-            stop_requested(),
-            stopping(),
-            goodbye(),
-        ] {
-            assert!(!text.is_empty());
+        set(parse("de").unwrap());
+        assert!(done(2.0).contains("Fertig (2.000 s)"));
+        for entry_index in 0..LANGUAGES.len() {
+            set(Language(entry_index));
+            for text in [
+                starting("Release", "1.0.0", "1.21.50", 766),
+                offline_warning_1(),
+                offline_warning_2(),
+                network_running("127.0.0.1:19132"),
+                level_info("world", 7),
+                done(0.5),
+                signal_stop(),
+                stop_requested(),
+                stopping(),
+                goodbye(),
+                player_joined("Steve", 1, "Black"),
+                player_left("Steve", 1),
+                help_text(),
+            ] {
+                assert!(!text.is_empty());
+                assert!(!text.contains('{') && !text.contains('}'), "{text}");
+            }
         }
         set(Language::En);
         assert_eq!(current(), Language::En);
+    }
+
+    #[test]
+    fn a_missing_key_falls_back_to_english_then_to_the_key() {
+        assert_eq!(text_in(Language::Fa, "no.such.key", &[]), "no.such.key");
+        assert_eq!(text_in(Language::En, "goodbye", &[]), "Goodbye.");
     }
 }

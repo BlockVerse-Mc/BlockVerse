@@ -12,6 +12,7 @@ mod metrics;
 mod plugins;
 mod selftest;
 mod server;
+mod setup;
 mod shared;
 mod version;
 mod world;
@@ -33,6 +34,7 @@ fn main() {
     if let Some(code) = cli::handle(&args) {
         std::process::exit(code);
     }
+    setup::first_run();
     let tagging_disabled = disable_heap_tagging();
     let (cfg, warnings) = config::load_settings();
     let mut builder = tokio::runtime::Builder::new_multi_thread();

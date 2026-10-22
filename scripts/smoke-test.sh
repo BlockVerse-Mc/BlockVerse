@@ -13,7 +13,7 @@ mkdir -p "$WORK/plugins"
 cp "$PLUGIN" "$WORK/plugins/"
 cd "$WORK"
 printf 'fakejoin Steve\nfakechat 1 hello everyone\nfakechat 1 this has a badword\nlist\nstatus\nstop\n' \
-  | BV_BIND=127.0.0.1:19199 "$BIN" > out.txt 2>&1
+  | BV_NO_SETUP=1 BV_BIND=127.0.0.1:19199 "$BIN" > out.txt 2>&1
 cat out.txt
 # Checks
 grep -q "Loaded plugin RustHello" out.txt

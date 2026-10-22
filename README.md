@@ -47,6 +47,10 @@ cd ~/blockverse-server && ./start.sh
 
 On Windows run `start.bat` in `%USERPROFILE%\blockverse-server`. Details: [docs/INSTALL.md](docs/INSTALL.md).
 
+## Languages
+
+The console speaks 14 languages: en, fa, ar, tr, ru, es, pt, fr, de, it, id, zh, ja, ko. The server asks for the language on the first start, or set `language=` in `server.properties`. Translations are in `crates/bv-server/lang/` and are checked by tests; native speakers are welcome to improve them ([docs/TRANSLATING.md](docs/TRANSLATING.md)).
+
 ## Supported clients
 
 | Minecraft Bedrock | Protocol | Status |
