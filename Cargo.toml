@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+exclude = ["crates/bv-server"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+publish = false

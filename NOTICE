@@ -1,0 +1,10 @@
+BlockVerse
+Copyright (C) 2026 BlockVerse contributors
+
+This product includes software developed by third parties:
+
+* bedrock-rs (https://github.com/bedrock-crustaceans/bedrock-rs), Apache License 2.0.
+  Used as a library by crates/bv-server, and crates/bv-server/src/main.rs is adapted from
+  bedrock-rs's examples/server.rs. Copyright (c) the bedrock-rs contributors.
+
+BlockVerse is not an official Minecraft product and is not approved by or associated with Mojang.

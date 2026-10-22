@@ -1,0 +1,7 @@
+target/
+native/build/
+*.so
+*.dll
+*.dylib
+bvmc/
+dist/

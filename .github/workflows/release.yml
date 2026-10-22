@@ -1,0 +1,88 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches the version
+        run: |
+          VERSION=$(grep -m1 '^version' crates/bv-server/Cargo.toml | cut -d'"' -f2)
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match version $VERSION in crates/bv-server/Cargo.toml"
+            exit 1
+          fi
+      - name: Lock file is committed
+        run: test -f crates/bv-server/Cargo.lock
+      - name: Installer tests
+        run: sh scripts/test-installer.sh
+
+  linux:
+    needs: check
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: linux-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test
+        working-directory: crates/bv-server
+        run: cargo test --locked
+      - name: Build
+        working-directory: crates/bv-server
+        run: cargo build --release --locked
+      - name: Package
+        run: sh scripts/package-release.sh crates/bv-server/target/release/blockverse ${{ matrix.target }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+  windows:
+    needs: check
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        working-directory: crates/bv-server
+        run: cargo build --release --locked
+      - name: Package
+        shell: bash
+        run: sh scripts/package-release.sh crates/bv-server/target/release/blockverse.exe windows-x86_64
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+  android:
+    needs: check
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - run: cargo install cargo-ndk --locked
+      - name: Build
+        working-directory: crates/bv-server
+        run: cargo ndk -t arm64-v8a build --release --locked
+      - name: Package
+        run: sh scripts/package-release.sh crates/bv-server/target/aarch64-linux-android/release/blockverse android-aarch64
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          prerelease: ${{ contains(github.ref_name, '-') }}

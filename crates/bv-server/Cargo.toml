@@ -1,0 +1,33 @@
+[package]
+name = "bv-server"
+version = "1.0.0"
+rust-version = "1.85"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+description = "BlockVerse server for Minecraft Bedrock 1.21.50 (protocol 766): login, console, native plugins"
+
+# Standalone on purpose: keeps the heavy git dependency out of the main workspace until it is proven.
+[workspace]
+
+[[bin]]
+name = "blockverse"
+path = "src/main.rs"
+
+[dependencies]
+bedrock = { git = "https://github.com/BlockVerse-Mc/BlockVerse-Protocol", rev = "fc06fe9", default-features = false, features = ["network", "protocol-v766", "protocol-unknown"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "io-std", "io-util"] }
+uuid = "1"
+libloading = "0.8"
+nbtx = { git = "https://github.com/BlockVerse-Mc/BlockVerse-NBT" }
+bv-plugin-abi = { path = "../bv-plugin-abi" }
+bv-skins = { path = "../bv-skins" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

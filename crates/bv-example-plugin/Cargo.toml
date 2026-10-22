@@ -1,0 +1,13 @@
+[package]
+name = "bv-example-plugin"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+description = "Example BlockVerse plugin written in Rust"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bv-plugin-abi = { path = "../bv-plugin-abi" }

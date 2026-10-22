@@ -1,0 +1,93 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format check
+        run: cargo fmt --all -- --check
+        continue-on-error: true
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+        continue-on-error: true
+      - name: Tests
+        run: cargo test --workspace
+
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            crates/bv-server
+      - name: Format check
+        working-directory: crates/bv-server
+        run: cargo fmt -- --check
+        continue-on-error: true
+      - name: Clippy
+        working-directory: crates/bv-server
+        run: cargo clippy --all-targets
+        continue-on-error: true
+      - name: Server unit tests
+        working-directory: crates/bv-server
+        run: cargo test
+      - name: Build example plugin
+        run: cargo build -p bv-example-plugin
+      - name: Build server
+        working-directory: crates/bv-server
+        run: cargo build
+      - name: Smoke test
+        run: sh scripts/smoke-test.sh
+
+  windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/bv-server
+      - name: Server unit tests
+        working-directory: crates/bv-server
+        run: cargo test
+      - name: Build server
+        working-directory: crates/bv-server
+        run: cargo build
+
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make -C native test
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax
+        run: |
+          for f in install.sh start.sh scripts/*.sh scripts/blockverse; do sh -n "$f"; done
+      - name: ShellCheck
+        run: shellcheck install.sh start.sh scripts/*.sh scripts/blockverse
+        continue-on-error: true
+      - name: Installer tests
+        run: sh scripts/test-installer.sh

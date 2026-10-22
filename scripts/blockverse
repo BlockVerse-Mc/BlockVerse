@@ -1,0 +1,63 @@
+#!/bin/sh
+# Locate
+ROOT="${BV_HOME:-__BV_HOME__}"
+case "$ROOT" in
+  __*) ROOT="$(cd "$(dirname "$0")/.." && pwd)" ;;
+esac
+RELEASE_BIN="$ROOT/crates/bv-server/target/release/blockverse"
+DEBUG_BIN="$ROOT/crates/bv-server/target/debug/blockverse"
+
+usage() {
+  echo "BlockVerse server"
+  echo "  blockverse start     run the server (data folder: $ROOT/bvmc)"
+  echo "  blockverse update    download the latest version and rebuild"
+  echo "  blockverse config    edit server.properties"
+  echo "  blockverse report    bundle settings and logs into one file for bug reports"
+  echo "  blockverse path      print the install folder"
+}
+
+find_bin() {
+  if [ -x "$RELEASE_BIN" ]; then
+    echo "$RELEASE_BIN"
+  elif [ -x "$DEBUG_BIN" ]; then
+    echo "$DEBUG_BIN"
+  fi
+}
+
+# Commands
+case "${1:-help}" in
+  start)
+    BIN="$(find_bin)"
+    if [ -z "$BIN" ]; then
+      echo "The server is not built yet. Run: blockverse update"
+      exit 1
+    fi
+    mkdir -p "$ROOT/bvmc"
+    command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock
+    cd "$ROOT/bvmc" || exit 1
+    exec "$BIN"
+    ;;
+  update)
+    git -C "$ROOT" pull --ff-only || exit 1
+    cd "$ROOT/crates/bv-server" || exit 1
+    env CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_DEBUG=0 \
+      cargo build --release -j "${BV_JOBS:-2}"
+    ;;
+  config)
+    mkdir -p "$ROOT/bvmc"
+    if [ ! -f "$ROOT/bvmc/server.properties" ]; then
+      echo "server.properties is created on the first start. Run: blockverse start"
+      exit 1
+    fi
+    "${EDITOR:-nano}" "$ROOT/bvmc/server.properties"
+    ;;
+  report)
+    sh "$ROOT/scripts/report.sh"
+    ;;
+  path)
+    echo "$ROOT"
+    ;;
+  *)
+    usage
+    ;;
+esac
