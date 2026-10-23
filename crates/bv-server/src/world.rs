@@ -147,6 +147,11 @@ fn biome_bytes(explicit: bool) -> Vec<u8> {
     out
 }
 
+// Diagnostics
+pub fn hex(data: &[u8]) -> String {
+    data.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+}
+
 // Variants: 0 full chunk, 1 no sub chunks, 2 no sub chunks and no biomes, 3 full chunk with explicit biomes
 pub fn chunk_variant(variant: u8) -> (u32, Vec<u8>) {
     let mut out = Vec::new();
@@ -183,6 +188,12 @@ mod tests {
             shift += 7;
         }
         ((value >> 1) as i32) ^ -((value & 1) as i32)
+    }
+
+    #[test]
+    fn hex_dump_is_lowercase_and_space_separated() {
+        assert_eq!(hex(&[0, 255, 16]), "00 ff 10");
+        assert_eq!(hex(&[]), "");
     }
 
     #[test]

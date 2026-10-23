@@ -40,3 +40,37 @@ BlockVerse 1.0.0 speaks protocol 766 only. With a newer client:
 3. After that, run the whole table above again with the newer client.
 
 Both client versions stay in the table. Beta and preview clients are not part of the release checks.
+
+## Finding the packet the client rejects ("Server sent broken packet")
+
+The server sends everything and the client disconnects itself, so the server log cannot name the bad packet. Narrow it down by changing only one thing per run. Use `log-level=trace`.
+
+| Run | Settings | Packets sent after StartGame | If the client still shows the error |
+|---|---|---|---|
+| A | `world-stage=0` | biome list, actor list, creative content, chunk radius | the cause is in the login packets, StartGame or the three extra packets |
+| B | `world-stage=1` | A plus the chunk publisher update | the cause is the publisher update or earlier |
+| C | `world-stage=2`, `chunk-variant=auto`, connect 4 times | B plus one chunk, payload variants 0 to 3 | compare the 4 variants (below) |
+| D | like C with `BV_SKIP_EXTRA=1` in the environment | like C without the biome, actor and creative packets | tells whether those three packets matter |
+
+For stages 0 and 1 the client waits on the loading screen. Wait 20 seconds and note whether the error appears.
+
+Chunk payload variants: 0 full chunk, 1 no sub chunks, 2 no sub chunks and no biomes (only the border byte), 3 full chunk with explicit biomes. Reading the four results:
+
+- Only variant 2 survives: the biome data or the biome definitions are suspect.
+- Variants 1 and 2 survive but 0 and 3 do not: the sub chunk bytes are suspect.
+- All four fail: the chunk payload is not the cause; look at the packets before it.
+- All four survive: the earlier failures came from stage 3 (many chunks per batch or PlayerSpawn); run stage 3 with the surviving variant.
+
+Start a run like this (Termux), then connect and write down the client message and the time until it appears:
+
+```
+cd ~/blockverse-server/bvmc && sed -i 's/^log-level=.*/log-level=trace/; s/^world-stage=.*/world-stage=2/; s/^chunk-variant=.*/chunk-variant=auto/' server.properties && cd .. && ./start.sh
+```
+
+### What the log shows
+
+- `<- Name` lines: packets received from the client (first 60).
+- `-> #N Name (+ms)` lines: packets sent, numbered, with the time since login started. Consecutive equal packets are grouped (`LevelChunkPacket x9`).
+- `Chunk payload: ...` and, at trace level, `Chunk payload bytes: ...`: the exact bytes of the chunk data.
+- At trace level the text form of every sent packet except chunks, to check each field value.
+- When the connection ends: `Connection of player N closed after X packets, T s (reason)` and `Last packets sent to player N: ...` with the last four sent packets. The reason is the transport error, or `the connection ended` when the client closed it. A `Player N sent DisconnectPacket ...` line appears if the client sent a disconnect packet.

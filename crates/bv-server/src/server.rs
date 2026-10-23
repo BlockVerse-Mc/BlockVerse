@@ -93,7 +93,7 @@ pub async fn handle_connection(unknown_conn: Connection<Unknown>, shared: Arc<Sh
         return Err("too many logins in progress, connection refused".to_string());
     };
     let limit = Duration::from_secs(shared.config.login_timeout_secs);
-    let (mut conn, name) = match tokio::time::timeout(limit, login_phase(unknown_conn, &shared)).await {
+    let (mut conn, name, mut journal) = match tokio::time::timeout(limit, login_phase(unknown_conn, &shared)).await {
         Ok(Ok(done)) => done,
         Ok(Err(e)) => {
             shared.metrics.login_failures.fetch_add(1, Ordering::Relaxed);
@@ -113,7 +113,15 @@ pub async fn handle_connection(unknown_conn: Connection<Unknown>, shared: Arc<Sh
     let mut limiter = RateLimiter::new(shared.config.max_packets_per_second, joined_at);
     let mut received: u64 = 0;
     let mut logged: u32 = 0;
-    'session: while let Ok(packets) = conn.recv().await {
+    let mut close_reason = String::from("the connection ended");
+    'session: loop {
+        let packets = match conn.recv().await {
+            Ok(packets) => packets,
+            Err(e) => {
+                close_reason = format!("receiving failed: {e}");
+                break 'session;
+            }
+        };
         let count = packets.len() as u64;
         received += count;
         shared.metrics.add_packets(count);
@@ -124,12 +132,16 @@ pub async fn handle_connection(unknown_conn: Connection<Unknown>, shared: Arc<Sh
         for packet in &packets {
             if logger::enabled(Level::Debug) && logged < 60 {
                 logged += 1;
-                logger::debug(&format!("<- {}", packet_name(packet)));
+                let name = packet_name(packet);
+                logger::debug(&format!("<- {name}"));
+                if name.contains("Disconnect") {
+                    logger::info(&format!("Player {id} sent {packet:?}"));
+                }
             }
             match packet {
                 Protocol::RequestChunkRadiusPacket(request) => {
                     let radius = request.chunk_radius.clamp(1, shared.config.view_distance.max(1));
-                    if let Err(e) = send_world(&mut conn, radius, &shared).await {
+                    if let Err(e) = send_world(&mut conn, radius, &shared, &mut journal).await {
                         logger::warn(&format!("Sending the world to player {id} failed: {e}"));
                         break 'session;
                     }
@@ -143,9 +155,10 @@ pub async fn handle_connection(unknown_conn: Connection<Unknown>, shared: Arc<Sh
         }
     }
     logger::info(&format!(
-        "Connection of player {id} closed after {received} packets, {:.2} s",
+        "Connection of player {id} closed after {received} packets, {:.2} s ({close_reason})",
         joined_at.elapsed().as_secs_f64()
     ));
+    logger::info(&format!("Last packets sent to player {id}: {}", journal.summary()));
     shared.player_quit(id);
     Ok(())
 }
@@ -154,7 +167,9 @@ pub async fn handle_connection(unknown_conn: Connection<Unknown>, shared: Arc<Sh
 async fn login_phase(
     mut unknown_conn: Connection<Unknown>,
     shared: &Shared,
-) -> Result<(Connection<Protocol>, Option<String>), String> {
+) -> Result<(Connection<Protocol>, Option<String>, Journal), String> {
+    let mut journal = Journal::new();
+
     // RequestNetworkSettings
     let packets = unknown_conn
         .recv()
@@ -181,7 +196,7 @@ async fn login_phase(
     };
 
     // NetworkSettings
-    conn.send(&[Protocol::NetworkSettingsPacket(Box::new(NetworkSettingsPacket {
+    journal.send(&mut conn, &[Protocol::NetworkSettingsPacket(Box::new(NetworkSettingsPacket {
         compression_threshold: 1,
         compression_algorithm: PacketCompressionAlgorithm::None,
         client_throttle_enabled: false,
@@ -202,7 +217,7 @@ async fn login_phase(
     trace(shared, &format!("login received, player name: {name:?}"));
 
     // Resource packs
-    conn.send(&[
+    journal.send(&mut conn, &[
         Protocol::PlayStatusPacket(Box::new(PlayStatusPacket {
             status: PlayStatus::LoginSuccess,
         })),
@@ -330,14 +345,14 @@ async fn login_phase(
         },
     };
     trace(shared, "StartGame built");
-    conn.send(&[Protocol::StartGamePacket(Box::new(start_game))])
+    journal.send(&mut conn, &[Protocol::StartGamePacket(Box::new(start_game))])
         .await
         .map_err(|e| format!("sending StartGame: {e}"))?;
     trace(shared, "sent StartGame");
 
     // World data
     if std::env::var_os("BV_SKIP_EXTRA").is_none() {
-    conn.send(&[
+    journal.send(&mut conn, &[
         Protocol::BiomeDefinitionListPacket(Box::new(BiomeDefinitionListPacket {
             biome_definition_data: HashMap::new(),
         })),
@@ -351,17 +366,22 @@ async fn login_phase(
     trace(shared, "sent biome, actor and creative content packets");
     }
 
-    Ok((conn, name))
+    Ok((conn, name, journal))
 }
 
 // World
-async fn send_world(conn: &mut Connection<Protocol>, radius: i32, shared: &Shared) -> Result<(), String> {
+async fn send_world(
+    conn: &mut Connection<Protocol>,
+    radius: i32,
+    shared: &Shared,
+    journal: &mut Journal,
+) -> Result<(), String> {
     let stage = shared.config.world_stage;
     let variant = shared.pick_chunk_variant();
     logger::info(&format!("World test: stage {stage}, chunk variant {variant}"));
 
     // Chunk radius
-    conn.send(&[Protocol::ChunkRadiusUpdatedPacket(Box::new(ChunkRadiusUpdatedPacket {
+    journal.send(conn, &[Protocol::ChunkRadiusUpdatedPacket(Box::new(ChunkRadiusUpdatedPacket {
         chunk_radius: radius,
     }))])
     .await
@@ -372,7 +392,7 @@ async fn send_world(conn: &mut Connection<Protocol>, radius: i32, shared: &Share
     }
 
     // Publisher update
-    conn.send(&[Protocol::NetworkChunkPublisherUpdatePacket(Box::new(NetworkChunkPublisherUpdatePacket {
+    journal.send(conn, &[Protocol::NetworkChunkPublisherUpdatePacket(Box::new(NetworkChunkPublisherUpdatePacket {
         new_view_position: BlockPos { x: 0, y: world::SPAWN_FEET_Y, z: 0 },
         new_view_radius: radius as u32 * 16,
         server_built_chunks: vec![],
@@ -387,6 +407,14 @@ async fn send_world(conn: &mut Connection<Protocol>, radius: i32, shared: &Share
     // Chunks
     let chunk_radius = if stage == 2 { 0 } else { radius };
     let (sub_chunk_count, payload) = world::chunk_variant(variant);
+    logger::debug(&format!(
+        "Chunk payload: variant {variant}, sub chunk count {sub_chunk_count}, {} bytes, {} chunks, dimension 0, cache off",
+        payload.len(),
+        (2 * chunk_radius + 1).pow(2)
+    ));
+    if logger::enabled(Level::Trace) {
+        logger::trace(&format!("Chunk payload bytes: {}", world::hex(&payload)));
+    }
     let mut chunks = Vec::new();
     for chunk_x in -chunk_radius..=chunk_radius {
         for chunk_z in -chunk_radius..=chunk_radius {
@@ -403,7 +431,7 @@ async fn send_world(conn: &mut Connection<Protocol>, radius: i32, shared: &Share
     }
     shared.metrics.add_chunks(chunks.len() as u64);
     for (index, batch) in chunks.chunks(16).enumerate() {
-        conn.send(batch)
+        journal.send(conn, batch)
             .await
             .map_err(|e| format!("sending chunk batch {index}: {e}"))?;
         trace(shared, &format!("sent chunk batch {index} ({} chunks)", batch.len()));
@@ -413,7 +441,7 @@ async fn send_world(conn: &mut Connection<Protocol>, radius: i32, shared: &Share
     }
 
     // PlayerSpawn
-    conn.send(&[Protocol::PlayStatusPacket(Box::new(PlayStatusPacket {
+    journal.send(conn, &[Protocol::PlayStatusPacket(Box::new(PlayStatusPacket {
         status: PlayStatus::PlayerSpawn,
     }))])
     .await
@@ -422,9 +450,84 @@ async fn send_world(conn: &mut Connection<Protocol>, radius: i32, shared: &Share
     Ok(())
 }
 
-fn packet_name(packet: &Protocol) -> String {
-    let text = format!("{packet:?}");
+fn name_of(text: &str) -> String {
     text.split(['(', ' ', '{']).next().unwrap_or("?").to_string()
+}
+
+fn packet_name(packet: &Protocol) -> String {
+    name_of(&format!("{packet:?}"))
+}
+
+fn clip(text: &str, limit: usize) -> String {
+    let short: String = text.chars().take(limit).collect();
+    if short.len() < text.len() {
+        format!("{short}...")
+    } else {
+        short
+    }
+}
+
+fn summarize(names: &[String]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut index = 0;
+    while index < names.len() {
+        let mut run = 1;
+        while index + run < names.len() && names[index + run] == names[index] {
+            run += 1;
+        }
+        if run > 1 {
+            parts.push(format!("{} x{run}", names[index]));
+        } else {
+            parts.push(names[index].clone());
+        }
+        index += run;
+    }
+    parts.join(", ")
+}
+
+// Outbound journal
+struct Journal {
+    started: std::time::Instant,
+    entries: Vec<(u128, String)>,
+}
+
+impl Journal {
+    fn new() -> Self {
+        Self { started: std::time::Instant::now(), entries: Vec::new() }
+    }
+
+    fn record(&mut self, names: &[String]) {
+        let text = summarize(names);
+        let millis = self.started.elapsed().as_millis();
+        logger::debug(&format!("-> #{} {text} (+{millis} ms)", self.entries.len() + 1));
+        self.entries.push((millis, text));
+    }
+
+    fn summary(&self) -> String {
+        let first = self.entries.len().saturating_sub(4);
+        self.entries
+            .iter()
+            .enumerate()
+            .skip(first)
+            .map(|(index, (millis, text))| format!("#{} {text} (+{millis} ms)", index + 1))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    async fn send(&mut self, conn: &mut Connection<Protocol>, packets: &[Protocol]) -> Result<(), String> {
+        let mut names = Vec::with_capacity(packets.len());
+        for packet in packets {
+            let text = format!("{packet:?}");
+            let name = name_of(&text);
+            if logger::enabled(Level::Trace) && name != "LevelChunkPacket" {
+                logger::trace(&format!("   {}", clip(&text, 1500)));
+            }
+            names.push(name);
+        }
+        conn.send(packets).await.map_err(|e| e.to_string())?;
+        self.record(&names);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -440,6 +543,32 @@ mod tests {
         assert_eq!(difficulty(config::Difficulty::Hard) as i32, 3);
         assert_eq!(permission(PermissionLevel::Visitor) as i32, 0);
         assert_eq!(permission(PermissionLevel::Operator) as i32, 2);
+    }
+
+    #[test]
+    fn consecutive_packets_are_grouped_in_the_journal() {
+        let names: Vec<String> = ["A", "B", "B", "B", "A"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(summarize(&names), "A, B x3, A");
+        assert_eq!(summarize(&[]), "");
+    }
+
+    #[test]
+    fn the_journal_keeps_the_last_four_entries() {
+        let mut journal = Journal::new();
+        for i in 0..6 {
+            journal.record(&[format!("P{i}")]);
+        }
+        let text = journal.summary();
+        assert!(text.contains("#6 P5") && text.contains("#3 P2"), "{text}");
+        assert!(!text.contains("#2 P1"), "{text}");
+    }
+
+    #[test]
+    fn packet_names_stop_at_the_first_separator() {
+        assert_eq!(name_of("PlayStatusPacket(PlayStatusPacket { status: LoginSuccess })"), "PlayStatusPacket");
+        assert_eq!(name_of("Unit"), "Unit");
+        assert_eq!(clip("abcdef", 3), "abc...");
+        assert_eq!(clip("abc", 3), "abc");
     }
 
     #[test]
