@@ -20,6 +20,10 @@ git push origin v1.0.0
 
 The release workflow checks that the tag equals the version, builds and tests Linux (x86_64 and aarch64), Windows and Android files, writes a `.sha256` for each and attaches them to a GitHub release. A tag with a hyphen (`v1.1.0-rc.1`) is marked as a pre-release.
 
+## Rolling build
+
+Every push to `main` runs `.github/workflows/nightly.yml`: it tests, builds (profile `dist`) and packages Linux (x86_64, aarch64) and Windows, plus Android as an experiment, moves the tag `nightly` to the commit and replaces the files of the pre-release `Nightly build`. `install.sh` and `install.ps1` use it while no release exists, so a new user never has to compile. `crates/bv-server/Cargo.lock` must stay committed because the builds use `--locked`.
+
 ## After the tag
 
 1. Open the release page and check that the `linux-x86_64`, `linux-aarch64` files and their `.sha256` files are attached. Windows and Android are experimental: if a job failed, the installer builds from source on those systems.

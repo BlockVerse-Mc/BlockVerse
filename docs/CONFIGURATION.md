@@ -1,6 +1,6 @@
 # Configuration
 
-The server reads `server.properties` from its data folder (`bvmc/`). The file is created with documented defaults on the first start and is never overwritten. If only the old `blockverse.properties` exists it is read instead (with a warning); copy its values to `server.properties`.
+The server reads `server.properties` from its data folder (the folder of the binary; `bvmc/` in a source checkout). The file is created with documented defaults on the first start and is never overwritten. If only the old `blockverse.properties` exists it is read instead (with a warning); copy its values to `server.properties`.
 
 Invalid values are reported in the log and the default is used. Unknown keys are ignored with a warning.
 

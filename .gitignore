@@ -4,4 +4,7 @@ native/build/
 *.dll
 *.dylib
 bvmc/
+/server.properties
+/logs/
+/plugins/
 dist/

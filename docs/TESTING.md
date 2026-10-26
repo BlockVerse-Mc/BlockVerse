@@ -15,7 +15,7 @@ Every push runs these on GitHub Actions. Windows is built as an extra job that m
 
 ## Real client: Minecraft Bedrock 1.21.50 (protocol 766)
 
-Run on the same network as the server (`server-ip=0.0.0.0` in `bvmc/server.properties` when the client is another device) with `log-level=debug`.
+Run on the same network as the server (`server-ip=0.0.0.0` in `server.properties` when the client is another device) with `log-level=debug`.
 
 | # | Step | Pass |
 |---|---|---|
@@ -64,7 +64,7 @@ Chunk payload variants: 0 full chunk, 1 no sub chunks, 2 no sub chunks and no bi
 Start a run like this (Termux), then connect and write down the client message and the time until it appears:
 
 ```
-cd ~/blockverse-server/bvmc && sed -i 's/^log-level=.*/log-level=trace/; s/^world-stage=.*/world-stage=2/; s/^chunk-variant=.*/chunk-variant=auto/' server.properties && cd .. && ./start.sh
+sed -i 's/^log-level=.*/log-level=trace/; s/^world-stage=.*/world-stage=2/; s/^chunk-variant=.*/chunk-variant=auto/' server.properties && ./start.sh
 ```
 
 ### What the log shows

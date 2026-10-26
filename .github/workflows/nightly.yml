@@ -1,0 +1,92 @@
+name: Nightly
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            exe: ""
+          - os: ubuntu-24.04-arm
+            target: linux-aarch64
+            exe: ""
+          - os: windows-latest
+            target: windows-x86_64
+            exe: ".exe"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/bv-server
+      - name: Test
+        working-directory: crates/bv-server
+        run: cargo test --locked
+      - name: Build
+        working-directory: crates/bv-server
+        run: cargo build --profile dist --locked
+      - name: Package
+        shell: bash
+        run: sh scripts/package-release.sh crates/bv-server/target/dist/blockverse${{ matrix.exe }} ${{ matrix.target }} nightly
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.target }}
+          path: dist/*.tar.gz*
+
+  android:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/bv-server
+      - run: cargo install cargo-ndk --locked
+      - name: Build
+        working-directory: crates/bv-server
+        run: cargo ndk -t arm64-v8a build --profile dist --locked
+      - name: Package
+        run: sh scripts/package-release.sh crates/bv-server/target/aarch64-linux-android/dist/blockverse android-aarch64 nightly
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-android-aarch64
+          path: dist/*.tar.gz*
+
+  publish:
+    needs: [build, android]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nightly-*
+          path: dist
+          merge-multiple: true
+      - name: Move the nightly tag
+        run: |
+          git tag -f nightly "$GITHUB_SHA"
+          git push -f origin nightly
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly build
+          prerelease: true
+          body: Prebuilt server of the latest commit on main. It is replaced on every push. Use a version tag for a stable release.
+          files: dist/*

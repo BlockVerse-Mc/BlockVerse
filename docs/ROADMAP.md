@@ -19,12 +19,13 @@
 - [x] Player name from the login data (offline mode, unit-tested on synthetic tokens; verify with a real client)
 - [x] `debug=true` logs the first 60 packets a client sends
 - [ ] Verified identity (online mode)
-- [x] Login timeout, simultaneous login limit, packet rate limit, log files (`bvmc/logs`)
+- [x] Login timeout, simultaneous login limit, packet rate limit, log files (`logs/`)
 - [x] Flat world chunks sent to the client (written, unit-tested against a python mirror; needs a real client test)
 - [ ] Load a saved world
 - [ ] Movement and rotation, block break and place
 - [ ] Chat packets (receive, broadcast), in-game commands
-- [ ] Save and load player data and world changes
+- [ ] Inventory and items (item stacks, containers, creative inventory): needed before player items can be saved
+- [ ] Save and load: world chunks and changes, player position and inventory (own format first)
 - [x] `server.properties` with validated settings, five log levels, more console commands
 - [ ] Rate limits and input validation, multi-player stress test
 
@@ -40,5 +41,5 @@
 - Batch outgoing packets per tick; compress only above a size threshold on public servers.
 - Run plugin callbacks on a dedicated thread or queue so a slow plugin cannot stall networking.
 - Limit view distance and chunk sends per tick; load and save chunks off the main thread.
-- Build releases with `cargo build --release` (thin LTO, one codegen unit) on a PC or in CI.
+- Shipped files are built in CI with `cargo build --profile dist` (thin LTO, one codegen unit); installs from source use the faster `release` profile.
 - Benchmark against other servers under the same hardware, players, plugins and world.

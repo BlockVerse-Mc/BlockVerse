@@ -15,6 +15,8 @@ Version 1.0.0 targets **Minecraft Bedrock 1.21.50 (protocol 766)**. Release chec
 
 ## Install
 
+Create an empty folder for the server, go into it and run the command there. Everything is installed in that folder and no other folder is created.
+
 Linux, macOS and Termux, newest version:
 
 ```
@@ -42,10 +44,10 @@ A specific version:
 Start the server:
 
 ```
-cd ~/blockverse-server && ./start.sh
+./start.sh
 ```
 
-On Windows run `start.bat` in `%USERPROFILE%\blockverse-server`. Details: [docs/INSTALL.md](docs/INSTALL.md).
+On Windows run `start.bat`. Details: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Languages
 
@@ -89,7 +91,7 @@ cd crates/bv-server && cargo build --release
 cd ../.. && ./start.sh
 ```
 
-Settings, logs and plugins live in the `bvmc/` folder (`server.properties`, `logs/latest.log`, `plugins/`). See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for every setting and the console commands (`help`).
+Settings, logs and plugins live next to the binary (`server.properties`, `logs/latest.log`, `plugins/`; in a source checkout inside `bvmc/`). See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for every setting and the console commands (`help`).
 Run `sh scripts/report.sh` to bundle settings and logs into one file for bug reports.
 
 ## Test

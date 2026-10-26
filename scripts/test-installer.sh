@@ -8,8 +8,11 @@ trap 'rm -rf "$WORK"' EXIT
 FAKE_HOME="$WORK/home"
 REMOTE="$WORK/remote"
 RELEASES="$WORK/releases"
+API="$WORK/api"
 BIN_DIR="$WORK/bin"
-mkdir -p "$FAKE_HOME" "$REMOTE" "$RELEASES" "$BIN_DIR"
+RUNS="$WORK/runs"
+TMP_AREA="$WORK/tmp"
+mkdir -p "$FAKE_HOME" "$REMOTE" "$RELEASES" "$API/repos/BlockVerse-Mc/BlockVerse/releases" "$BIN_DIR" "$RUNS" "$TMP_AREA"
 
 # Helpers
 fails=0
@@ -28,6 +31,25 @@ has_all() {
   for needle in "$@"; do
     printf '%s\n' "$text" | grep -q "$needle" || return 1
   done
+}
+
+newdir() {
+  mkdir -p "$RUNS/$1"
+  printf '%s' "$RUNS/$1"
+}
+
+install_in() {
+  name="$1"
+  shift
+  ( cd "$RUNS/$name" && sh "$INSTALL" "$@" 2>&1 )
+}
+
+no_folders() {
+  [ -z "$(find "$1" -mindepth 1 -type d)" ]
+}
+
+tmp_clean() {
+  [ -z "$(ls -A "$TMP_AREA")" ]
 }
 
 # Fake toolchain
@@ -97,89 +119,123 @@ case "$(uname -m)" in
 esac
 TARGET="linux-$ARCH"
 
-# Fake release
-printf '#!/bin/sh\ncase "${1:-}" in --version) echo "BlockVerse prebuilt"; exit 0 ;; --init) touch server.properties; exit 0 ;; esac\n' > "$WORK/prebuilt"
-chmod +x "$WORK/prebuilt"
-(cd "$REMOTE" && sh scripts/package-release.sh "$WORK/prebuilt" "$TARGET" >/dev/null)
-mkdir -p "$RELEASES/v1.0.0"
-cp "$REMOTE"/dist/blockverse-1.0.0-"$TARGET".tar.gz* "$RELEASES/v1.0.0/"
-rm -rf "$REMOTE/dist"
+# Fake releases
+make_release() {
+  marker="$1"
+  label="$2"
+  folder="$3"
+  printf '#!/bin/sh\ncase "${1:-}" in --version) echo "%s"; exit 0 ;; --init) echo "init $*" > init.txt; touch server.properties; exit 0 ;; esac\n' "$marker" > "$WORK/prebuilt"
+  chmod +x "$WORK/prebuilt"
+  (cd "$REMOTE" && sh scripts/package-release.sh "$WORK/prebuilt" "$TARGET" $label >/dev/null)
+  mkdir -p "$RELEASES/$folder"
+  cp "$REMOTE"/dist/blockverse-*-"$TARGET".tar.gz* "$RELEASES/$folder/"
+  rm -rf "$REMOTE/dist"
+}
+make_release "prebuilt-release" "" "v1.0.0"
+make_release "prebuilt-nightly" "nightly" "nightly"
+printf '{"tag_name": "v1.0.0", "prerelease": false}\n' > "$API/repos/BlockVerse-Mc/BlockVerse/releases/latest"
 
 # Environment
 export HOME="$FAKE_HOME"
 export PATH="$BIN_DIR:$PATH"
+export TMPDIR="$TMP_AREA"
 export BV_REPO_URL="file://$REMOTE"
 export BV_RELEASE_BASE="file://$RELEASES"
+export BV_API_BASE="file://$API"
 export BV_POLL=1
-unset BV_SERVER_NAME BV_LANGUAGE NO_COLOR || true
+unset BV_DIR BV_SERVER_NAME BV_LANGUAGE NO_COLOR BV_FORCE BV_FROM_SOURCE || true
 INSTALL="$ROOT/install.sh"
 
-# Source build of main
-export BV_DIR="$WORK/main"
-out="$(sh "$INSTALL" 2>&1)"
-check "main starts with the progress title" 'printf "%s\n" "$out" | head -n 1 | grep -qx "Preparing BlockVerse"'
-check "main shows every stage" 'has_all "$out" "Checking system" "Installing prerequisites" "Downloading source" "Downloading dependencies" "Compiling BlockVerse" "Installing files"'
-check "main shows a percentage while compiling" 'printf "%s\n" "$out" | grep -qE "Compiling BlockVerse \[[#.]*\] %[0-9]+$"'
-check "main ends the compile step with 100 percent and done" 'printf "%s\n" "$out" | grep -q "Compiling BlockVerse \[[#.]*] %100 done"'
-check "main prints Done and the start path last" '[ "$(printf "%s\n" "$out" | tail -n 2 | head -n 1)" = "Done" ] && printf "%s\n" "$out" | tail -n 1 | grep -q "start.sh"'
-check "main installs the binary" '[ -x "$BV_DIR/blockverse" ]'
-check "main installs start.sh" '[ -x "$BV_DIR/start.sh" ]'
-check "main was built from the newest commit" '[ -f "$BV_DIR/source/extra.txt" ]'
-check "main asks nothing and creates no settings" '[ ! -f "$BV_DIR/bvmc/server.properties" ]'
-check "VERSION file says main" '[ "$(cat "$BV_DIR/VERSION")" = "main" ]'
+# Newest release
+dir=$(newdir latest)
+out="$(install_in latest)"
+check "latest starts with the progress title" 'printf "%s\n" "$out" | head -n 1 | grep -qx "Preparing BlockVerse"'
+check "latest installs the newest release without compiling" 'has_all "$out" "Downloading BlockVerse v1.0.0" "Verifying download" "Installing files" && ! printf "%s\n" "$out" | grep -q "Compiling"'
+check "latest installed the release file" 'grep -q prebuilt-release "$dir/blockverse" && [ "$(cat "$dir/VERSION")" = "v1.0.0" ]'
+check "latest prints Done and how to start" '[ "$(printf "%s\n" "$out" | tail -n 2 | head -n 1)" = "Done" ] && printf "%s\n" "$out" | tail -n 1 | grep -q "./start.sh"'
+check "latest installs start.sh and the licenses" '[ -x "$dir/start.sh" ] && [ -f "$dir/LICENSE" ] && [ -f "$dir/NOTICE" ]'
+check "latest creates no folder" 'no_folders "$dir"'
+check "latest leaves no temporary files" 'tmp_clean'
 
-# Answers given through variables
-export BV_DIR="$WORK/answers"
-out="$(BV_SERVER_NAME="Test Server" BV_LANGUAGE=de sh "$INSTALL" 2>&1)"
-check "answers create server.properties through --init" '[ -f "$BV_DIR/bvmc/server.properties" ]'
-check "init received the answers" 'grep -q "server-name Test Server --language de" "$BV_DIR/bvmc/init.txt"'
-check "creating settings is a stage" 'has_all "$out" "Creating settings"'
+# Update in the same folder
+out="$(install_in latest)"
+check "running the command again in the same folder updates it" '[ -x "$dir/blockverse" ] && printf "%s\n" "$out" | tail -n 2 | head -n 1 | grep -qx "Done"'
 
-# Prebuilt tag
-export BV_DIR="$WORK/tag"
-out="$(sh "$INSTALL" v1.0.0 2>&1)"
-check "tag shows the download, verify and install stages" 'has_all "$out" "Downloading BlockVerse v1.0.0" "Verifying download" "Installing files" "Done"'
-check "tag installs the prebuilt file" 'grep -q prebuilt "$BV_DIR/blockverse"'
-check "tag did not build from source" '[ ! -d "$BV_DIR/source" ]'
-check "tag installs start.sh" '[ -x "$BV_DIR/start.sh" ]'
-check "tag installs the licenses" '[ -f "$BV_DIR/LICENSE" ] && [ -f "$BV_DIR/NOTICE" ]'
-check "VERSION file says v1.0.0" '[ "$(cat "$BV_DIR/VERSION")" = "v1.0.0" ]'
+# No release yet: the rolling build
+mv "$API/repos/BlockVerse-Mc/BlockVerse/releases/latest" "$WORK/latest.hidden"
+dir=$(newdir nightly-fallback)
+out="$(install_in nightly-fallback)"
+check "without a release the newest rolling build is installed" 'grep -q prebuilt-nightly "$dir/blockverse" && [ "$(cat "$dir/VERSION")" = "nightly" ]'
+check "the rolling build needs no compiler" '! printf "%s\n" "$out" | grep -q "Compiling" && no_folders "$dir" && tmp_clean'
+mv "$WORK/latest.hidden" "$API/repos/BlockVerse-Mc/BlockVerse/releases/latest"
+
+# Named channels
+dir=$(newdir nightly)
+out="$(install_in nightly nightly)"
+check "nightly installs the rolling build" 'grep -q prebuilt-nightly "$dir/blockverse"'
+dir=$(newdir tag)
+out="$(install_in tag v1.0.0)"
+check "a version tag installs that release" 'grep -q prebuilt-release "$dir/blockverse" && [ "$(cat "$dir/VERSION")" = "v1.0.0" ] && no_folders "$dir"'
 
 # Same command through a pipe
-export BV_DIR="$WORK/piped"
-out="$(cat "$INSTALL" | sh -s -- v1.0.0 2>&1)"
-check "piped install with a version works" '[ -x "$BV_DIR/start.sh" ]'
+dir=$(newdir piped)
+out="$(cd "$dir" && cat "$INSTALL" | sh -s -- v1.0.0 2>&1)"
+check "piped install with a version works" '[ -x "$dir/start.sh" ] && no_folders "$dir"'
+
+# Source build
+dir=$(newdir main)
+out="$(install_in main main)"
+check "main builds from source and shows every stage" 'has_all "$out" "Checking system" "Installing prerequisites" "Downloading source" "Downloading dependencies" "Compiling BlockVerse" "Installing files"'
+check "main shows a percentage while compiling" 'printf "%s\n" "$out" | grep -qE "Compiling BlockVerse \[[#.]*\] %[0-9]+$"'
+check "main ends the compile step with 100 percent and done" 'printf "%s\n" "$out" | grep -q "Compiling BlockVerse \[[#.]*] %100 done"'
+check "main installs the built binary in the folder" 'grep -q "BlockVerse fake" "$dir/blockverse" && [ -x "$dir/start.sh" ] && [ "$(cat "$dir/VERSION")" = "main" ]'
+check "main was built from the newest commit" '! [ -e "$dir/extra.txt" ]'
+check "main leaves no source folder, no folder and no temporary files" 'no_folders "$dir" && tmp_clean'
 
 # Tag without release files falls back to source
-export BV_DIR="$WORK/fallback"
 mv "$RELEASES/v1.0.0" "$RELEASES/hidden"
-out="$(sh "$INSTALL" v1.0.0 2>&1)"
-check "missing release file falls back to the source at the tag" '[ -d "$BV_DIR/source" ] && [ ! -f "$BV_DIR/source/extra.txt" ]'
-check "the fallback says so" 'has_all "$out" "no prebuilt file, building from source"'
+dir=$(newdir fallback)
+out="$(install_in fallback v1.0.0)"
+check "a missing release file falls back to the source at the tag" 'has_all "$out" "no prebuilt file, building from source" "Compiling BlockVerse" && grep -q "BlockVerse fake" "$dir/blockverse"'
+check "the fallback leaves no folder and no temporary files" 'no_folders "$dir" && tmp_clean'
 mv "$RELEASES/hidden" "$RELEASES/v1.0.0"
 
+# Answers given through variables
+dir=$(newdir answers)
+out="$(cd "$dir" && BV_SERVER_NAME="Test Server" BV_LANGUAGE=de sh "$INSTALL" v1.0.0 2>&1)"
+check "answers create server.properties in the folder" '[ -f "$dir/server.properties" ] && grep -q "server-name Test Server --language de" "$dir/init.txt"'
+
 # Damaged download is refused
-export BV_DIR="$WORK/damaged"
+dir=$(newdir damaged)
+cp "$RELEASES/v1.0.0/blockverse-1.0.0-$TARGET.tar.gz.sha256" "$WORK/sum.backup"
 echo "0000" > "$RELEASES/v1.0.0/blockverse-1.0.0-$TARGET.tar.gz.sha256"
-if out="$(sh "$INSTALL" v1.0.0 2>&1)"; then status=0; else status=1; fi
+if out="$(install_in damaged v1.0.0)"; then status=0; else status=1; fi
 check "a checksum mismatch stops the install" '[ "$status" -eq 1 ] && printf "%s\n" "$out" | grep -q "checksum mismatch"'
-check "nothing is installed after a mismatch" '[ ! -f "$BV_DIR/blockverse" ]'
+check "nothing is installed after a mismatch" '[ ! -e "$dir/blockverse" ] && tmp_clean'
+cp "$WORK/sum.backup" "$RELEASES/v1.0.0/blockverse-1.0.0-$TARGET.tar.gz.sha256"
 
 # Failing build
-export BV_DIR="$WORK/buildfail"
-if out="$(FAKE_BUILD_FAIL=1 sh "$INSTALL" 2>&1)"; then status=0; else status=1; fi
-check "a failing build stops the install" '[ "$status" -eq 1 ] && printf "%s\n" "$out" | grep -q "BlockVerse install failed"'
-check "a failing build shows the end of the compiler output" 'printf "%s\n" "$out" | grep -q "fake failure"'
-check "nothing is installed after a failing build" '[ ! -f "$BV_DIR/blockverse" ]'
+dir=$(newdir buildfail)
+if out="$(cd "$dir" && FAKE_BUILD_FAIL=1 sh "$INSTALL" main 2>&1)"; then status=0; else status=1; fi
+check "a failing build stops the install and shows the compiler output" '[ "$status" -eq 1 ] && has_all "$out" "BlockVerse install failed" "fake failure"'
+check "a failing build leaves only the log in the folder" '[ ! -e "$dir/blockverse" ] && [ -f "$dir/install.log" ] && no_folders "$dir" && tmp_clean'
+
+# Folder rules
+dir=$(newdir busy)
+echo "mine" > "$dir/notes.txt"
+if out="$(install_in busy v1.0.0)"; then status=0; else status=1; fi
+check "a folder with other files is refused" '[ "$status" -eq 1 ] && printf "%s\n" "$out" | grep -q "not empty" && [ ! -e "$dir/blockverse" ] && [ "$(cat "$dir/notes.txt")" = mine ]'
+if out="$(cd "$HOME" && sh "$INSTALL" v1.0.0 2>&1)"; then status=0; else status=1; fi
+check "the home folder is refused" '[ "$status" -eq 1 ] && printf "%s\n" "$out" | grep -q "empty folder you created" && [ ! -e "$HOME/blockverse" ]'
 
 # Invalid version
-export BV_DIR="$WORK/invalid"
-if out="$(sh "$INSTALL" '--bad;x' 2>&1)"; then status=0; else status=1; fi
+dir=$(newdir invalid)
+if out="$(install_in invalid '--bad;x')"; then status=0; else status=1; fi
 check "an invalid version is refused" '[ "$status" -eq 1 ] && printf "%s\n" "$out" | grep -q "invalid version"'
 
 # Start script
-export BV_DIR="$WORK/main"
-check "start.sh runs the installed binary in bvmc" '(cd "$WORK" && sh "$BV_DIR/start.sh" --version | grep -q "BlockVerse fake")'
+dir="$RUNS/main"
+check "start.sh runs the installed binary in the same folder" '(cd "$WORK" && sh "$dir/start.sh" --version | grep -q "BlockVerse fake") && no_folders "$dir"'
 
 if [ "$fails" -ne 0 ]; then
   echo "INSTALLER TESTS FAILED: $fails"

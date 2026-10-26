@@ -6,6 +6,7 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="${1:-}"
 TARGET="${2:-}"
+LABEL="${3:-}"
 if [ -z "$BIN" ]; then
   for candidate in "$ROOT/crates/bv-server/target/release/blockverse" "$ROOT/crates/bv-server/target/debug/blockverse"; do
     if [ -x "$candidate" ]; then BIN="$candidate"; break; fi
@@ -32,7 +33,7 @@ esac
 
 # Stage
 VERSION="$(grep -m1 '^version' "$ROOT/crates/bv-server/Cargo.toml" | cut -d'"' -f2)"
-NAME="blockverse-$VERSION-$TARGET"
+NAME="blockverse-${LABEL:-$VERSION}-$TARGET"
 OUT="$ROOT/dist"
 STAGE="$OUT/$NAME"
 rm -rf "$STAGE"
@@ -45,8 +46,8 @@ esac
 cat > "$STAGE/README.txt" <<EOS
 BlockVerse $VERSION ($TARGET)
 Run the server with: $( [ "$EXE" = "blockverse.exe" ] && echo start.bat || echo ./start.sh )
-Settings: bvmc/server.properties (created by: $EXE --init)
-Logs: bvmc/logs/latest.log   Plugins: bvmc/plugins/
+Settings: server.properties (created on the first start, or by: $EXE --init)
+Logs: logs/latest.log   Plugins: plugins/
 BlockVerse is not an official Minecraft product and is not approved by or associated with Mojang.
 EOS
 for file in LICENSE LICENSE-APACHE-2.0 NOTICE PLUGIN-EXCEPTION.md; do cp "$ROOT/$file" "$STAGE/$file"; done
