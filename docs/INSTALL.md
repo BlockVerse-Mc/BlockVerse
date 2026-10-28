@@ -51,7 +51,7 @@ Rolling builds and releases are prebuilt by GitHub Actions, so nothing is compil
 4. Works in a temporary folder that is deleted at the end. A failed install leaves only `install.log` in your folder.
 5. Ends with `Done` and `./start.sh`.
 
-Prebuilt targets: `android-aarch64` (Termux), `linux-x86_64`, `linux-aarch64`, `windows-x86_64`. The Android and Windows files are experimental. macOS builds from source.
+Prebuilt targets: `android-aarch64` (Termux), `linux-x86_64`, `linux-aarch64`, `windows-x86_64`. The Android file needs Android 8 or newer (API 26) and, like the Windows file, is experimental. macOS builds from source.
 
 ## First start
 

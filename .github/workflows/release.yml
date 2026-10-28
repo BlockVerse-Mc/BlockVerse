@@ -79,7 +79,7 @@ jobs:
       - run: cargo install cargo-ndk --locked
       - name: Build
         working-directory: crates/bv-server
-        run: cargo ndk -t arm64-v8a build --profile dist --locked
+        run: cargo ndk -t arm64-v8a --platform 26 build --profile dist --locked
       - name: Package
         run: sh scripts/package-release.sh crates/bv-server/target/aarch64-linux-android/dist/blockverse android-aarch64
       - uses: softprops/action-gh-release@v2
