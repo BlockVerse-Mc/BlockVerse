@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bedrock::network::compression::Compression;
@@ -81,6 +81,28 @@ fn permission(level: PermissionLevel) -> PlayerPermissionLevel {
 }
 
 // Connection
+// Probe plan: each new connection drops other packets, to find the one the client rejects
+const PROBE_PLAN: [&str; 6] = [
+    "",
+    "BiomeDefinitionListPacket,AvailableActorIdentifiersPacket,CreativeContentPacket",
+    "BiomeDefinitionListPacket",
+    "AvailableActorIdentifiersPacket",
+    "CreativeContentPacket",
+    "ChunkRadiusUpdatedPacket",
+];
+
+static PROBE_STEP: AtomicUsize = AtomicUsize::new(0);
+
+fn next_probe() -> Option<(usize, &'static str)> {
+    std::env::var_os("BV_PROBE")?;
+    let index = PROBE_STEP.fetch_add(1, Ordering::Relaxed) % PROBE_PLAN.len();
+    Some((index + 1, PROBE_PLAN[index]))
+}
+
+fn probe_label(list: &str) -> &str {
+    if list.is_empty() { "nothing" } else { list }
+}
+
 pub async fn handle_connection(unknown_conn: Connection<Unknown>, shared: Arc<Shared>) -> Result<(), String> {
     shared.metrics.connections.fetch_add(1, Ordering::Relaxed);
     if shared.is_full() {
@@ -92,8 +114,20 @@ pub async fn handle_connection(unknown_conn: Connection<Unknown>, shared: Arc<Sh
         unknown_conn.close().await;
         return Err("too many logins in progress, connection refused".to_string());
     };
+    let probe = next_probe();
+    let drop_list = match probe {
+        Some((step, list)) => {
+            logger::info(&format!(
+                "PROBE step {step}/{}: dropping [{}]. Connect, wait 10 s, then leave.",
+                PROBE_PLAN.len(),
+                probe_label(list)
+            ));
+            list.to_string()
+        }
+        None => std::env::var("BV_DROP").unwrap_or_default(),
+    };
     let limit = Duration::from_secs(shared.config.login_timeout_secs);
-    let (mut conn, name, mut journal) = match tokio::time::timeout(limit, login_phase(unknown_conn, &shared)).await {
+    let (mut conn, name, mut journal) = match tokio::time::timeout(limit, login_phase(unknown_conn, &shared, drop_list)).await {
         Ok(Ok(done)) => done,
         Ok(Err(e)) => {
             shared.metrics.login_failures.fetch_add(1, Ordering::Relaxed);
@@ -134,7 +168,7 @@ pub async fn handle_connection(unknown_conn: Connection<Unknown>, shared: Arc<Sh
                 logged += 1;
                 let name = packet_name(packet);
                 logger::debug(&format!("<- {name}"));
-                if name.contains("Disconnect") {
+                if name.contains("Disconnect") || name.contains("PacketViolation") {
                     logger::info(&format!("Player {id} sent {packet:?}"));
                 }
             }
@@ -159,6 +193,15 @@ pub async fn handle_connection(unknown_conn: Connection<Unknown>, shared: Arc<Sh
         joined_at.elapsed().as_secs_f64()
     ));
     logger::info(&format!("Last packets sent to player {id}: {}", journal.summary()));
+    if let Some((step, list)) = probe {
+        let idle = journal.idle_ms();
+        let verdict = if idle < 2000 { "REJECTED by the client" } else { "the client stayed" };
+        logger::info(&format!(
+            "PROBE RESULT step {step}/{} dropping [{}]: {verdict} (closed {idle} ms after the last packet sent)",
+            PROBE_PLAN.len(),
+            probe_label(list)
+        ));
+    }
     shared.player_quit(id);
     Ok(())
 }
@@ -167,8 +210,9 @@ pub async fn handle_connection(unknown_conn: Connection<Unknown>, shared: Arc<Sh
 async fn login_phase(
     mut unknown_conn: Connection<Unknown>,
     shared: &Shared,
+    drop_list: String,
 ) -> Result<(Connection<Protocol>, Option<String>, Journal), String> {
-    let mut journal = Journal::new();
+    let mut journal = Journal::new(drop_list);
 
     // RequestNetworkSettings
     let packets = unknown_conn
@@ -376,7 +420,7 @@ async fn send_world(
     shared: &Shared,
     journal: &mut Journal,
 ) -> Result<(), String> {
-    let stage = shared.config.world_stage;
+    let stage = if std::env::var_os("BV_PROBE").is_some() { 0 } else { shared.config.world_stage };
     let variant = shared.pick_chunk_variant();
     logger::info(&format!("World test: stage {stage}, chunk variant {variant}"));
 
@@ -489,11 +533,17 @@ fn summarize(names: &[String]) -> String {
 struct Journal {
     started: std::time::Instant,
     entries: Vec<(u128, String)>,
+    drop_list: String,
 }
 
 impl Journal {
-    fn new() -> Self {
-        Self { started: std::time::Instant::now(), entries: Vec::new() }
+    fn new(drop_list: String) -> Self {
+        Self { started: std::time::Instant::now(), entries: Vec::new(), drop_list }
+    }
+
+    fn idle_ms(&self) -> u128 {
+        let last = self.entries.last().map(|entry| entry.0).unwrap_or(0);
+        self.started.elapsed().as_millis().saturating_sub(last)
     }
 
     fn record(&mut self, names: &[String]) {
@@ -524,10 +574,28 @@ impl Journal {
             }
             names.push(name);
         }
-        conn.send(packets).await.map_err(|e| e.to_string())?;
-        self.record(&names);
+        let dropped = self.drop_list.clone();
+        if dropped.is_empty() {
+            conn.send(packets).await.map_err(|e| e.to_string())?;
+            self.record(&names);
+            return Ok(());
+        }
+        let mut kept = Vec::new();
+        for (packet, name) in packets.iter().zip(names.iter()) {
+            if is_dropped(&dropped, name) {
+                logger::info(&format!("BV_DROP: not sending {name}"));
+                continue;
+            }
+            conn.send(std::slice::from_ref(packet)).await.map_err(|e| e.to_string())?;
+            kept.push(name.clone());
+        }
+        self.record(&kept);
         Ok(())
     }
+}
+
+fn is_dropped(list: &str, name: &str) -> bool {
+    list.split(',').any(|item| item.trim() == name)
 }
 
 #[cfg(test)]
@@ -554,13 +622,38 @@ mod tests {
 
     #[test]
     fn the_journal_keeps_the_last_four_entries() {
-        let mut journal = Journal::new();
+        let mut journal = Journal::new(String::new());
         for i in 0..6 {
             journal.record(&[format!("P{i}")]);
         }
         let text = journal.summary();
         assert!(text.contains("#6 P5") && text.contains("#3 P2"), "{text}");
         assert!(!text.contains("#2 P1"), "{text}");
+    }
+
+    #[test]
+    fn the_probe_plan_starts_with_a_control_and_lists_packet_names() {
+        assert_eq!(PROBE_PLAN[0], "");
+        for entry in &PROBE_PLAN[1..] {
+            assert!(entry.split(',').all(|name| name.ends_with("Packet")), "{entry}");
+        }
+        assert_eq!(probe_label(""), "nothing");
+        assert_eq!(probe_label("A"), "A");
+    }
+
+    #[test]
+    fn the_journal_reports_time_since_the_last_packet() {
+        let mut journal = Journal::new(String::new());
+        journal.record(&["A".to_string()]);
+        assert!(journal.idle_ms() < 1000);
+    }
+
+    #[test]
+    fn the_drop_list_matches_whole_packet_names() {
+        assert!(is_dropped("BiomeDefinitionListPacket", "BiomeDefinitionListPacket"));
+        assert!(is_dropped("A, B ,C", "B"));
+        assert!(!is_dropped("BiomeDefinitionListPacket", "BiomeDefinition"));
+        assert!(!is_dropped("", "A"));
     }
 
     #[test]

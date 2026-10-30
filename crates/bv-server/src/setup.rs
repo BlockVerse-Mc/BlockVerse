@@ -40,7 +40,7 @@ pub fn ask(input: &mut dyn BufRead, output: &mut dyn Write) -> Answers {
     let mut language = Language::En;
     for _ in 0..3 {
         let prompt = lang::text_in(Language::En, "setup.language", &[]);
-        let _ = write!(output, "{prompt} [en]: ");
+        let _ = write!(output, "{prompt}: ");
         let _ = output.flush();
         let Some(answer) = read_answer(input) else {
             break;
@@ -51,7 +51,7 @@ pub fn ask(input: &mut dyn BufRead, output: &mut dyn Write) -> Answers {
         }
     }
     let prompt = lang::text_in(language, "setup.name", &[]);
-    let _ = write!(output, "{prompt} [BlockVerse]: ");
+    let _ = write!(output, "{prompt}: ");
     let _ = output.flush();
     let server_name = read_answer(input).unwrap_or_default();
     Answers { server_name, language }
@@ -113,6 +113,13 @@ mod tests {
         let (answers, _) = run("xx\n99\n0\nName\n");
         assert_eq!(answers.language, Language::En);
         assert_eq!(answers.server_name, "Name");
+    }
+
+    #[test]
+    fn the_prompts_do_not_show_bracketed_defaults() {
+        let (_, output) = run("\n\n");
+        assert!(!output.contains('['), "{output}");
+        assert!(output.contains("Language: ") && output.contains("Server name: "), "{output}");
     }
 
     #[test]

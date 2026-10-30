@@ -92,3 +92,5 @@ jobs:
         continue-on-error: true
       - name: Installer tests
         run: sh scripts/test-installer.sh
+      - name: Helper tests
+        run: sh scripts/test-bvdev.sh

@@ -67,10 +67,33 @@ Start a run like this (Termux), then connect and write down the client message a
 sed -i 's/^log-level=.*/log-level=trace/; s/^world-stage=.*/world-stage=2/; s/^chunk-variant=.*/chunk-variant=auto/' server.properties && ./start.sh
 ```
 
+### Automatic probe (`bvdev probe`)
+
+`BV_PROBE=1 ./start.sh` runs the bisect by itself: every new connection drops different packets (stage 0 is forced) and the server prints `PROBE RESULT step N/6 dropping [...]: REJECTED by the client` or `the client stayed`. Join six times, wait 10 seconds each time, leave, type `stop`. Steps: 1 nothing dropped (control), 2 all three packets after StartGame, 3 BiomeDefinitionList, 4 AvailableActorIdentifiers, 5 CreativeContent, 6 ChunkRadiusUpdated. The step that turns REJECTED into "stayed" names the packet. `bvdev probe` does the install and the run, and saves the result lines in Downloads (`bv-probe.txt`).
+
+### Dropping one packet type (`BV_DROP`)
+
+`BV_DROP=Name1,Name2 ./start.sh` makes the server skip every outbound packet with one of those names (the log shows `BV_DROP: not sending Name`). With the variable set, packets are sent one by one instead of in batches. Use it to test whether the client needs a packet or rejects it, for example:
+
+```
+BV_DROP=BiomeDefinitionListPacket ./start.sh
+BV_DROP=AvailableActorIdentifiersPacket ./start.sh
+BV_DROP=CreativeContentPacket ./start.sh
+BV_DROP=ChunkRadiusUpdatedPacket ./start.sh
+```
+
+Names are the ones shown in the `->` log lines. Do not drop `NetworkSettingsPacket`, `PlayStatusPacket` or `StartGamePacket`: the login cannot continue without them.
+
+### Results so far
+
+- Stage 3, variant 0: the client closes about 90 ms after the last chunk batch and `PlayStatus(PlayerSpawn)`.
+- Stage 0 (no chunks, no publisher update, no spawn status): the client still closes 24 ms after `ChunkRadiusUpdated`. The chunk bytes, the chunk header, the batch size and `PlayerSpawn` were never sent in that run, so they are not the cause of this disconnect. The cause is in `StartGame`, one of the three packets after it, or `ChunkRadiusUpdated`.
+
 ### What the log shows
 
 - `<- Name` lines: packets received from the client (first 60).
 - `-> #N Name (+ms)` lines: packets sent, numbered, with the time since login started. Consecutive equal packets are grouped (`LevelChunkPacket x9`).
 - `Chunk payload: ...` and, at trace level, `Chunk payload bytes: ...`: the exact bytes of the chunk data.
 - At trace level the text form of every sent packet except chunks, to check each field value.
+- `Player N sent PacketViolationWarningPacket ...`: the client's own report of the packet it found malformed (packet id and a context text). Look for it first.
 - When the connection ends: `Connection of player N closed after X packets, T s (reason)` and `Last packets sent to player N: ...` with the last four sent packets. The reason is the transport error, or `the connection ended` when the client closed it. A `Player N sent DisconnectPacket ...` line appears if the client sent a disconnect packet.
